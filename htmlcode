@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Spoon Energy Tracker</title>
+    
+    <!-- 1. Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- 2. Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+    <!-- 3. Import Map: STRICTLY PINNED VERSIONS TO PREVENT CONFLICTS -->
+    <script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@18.2.0",
+    "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+    "lucide-react": "https://esm.sh/lucide-react@0.344.0?deps=react@18.2.0",
+    "@google/genai": "https://esm.run/@google/genai",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/"
+  }
+}
+</script>
+    
+    <!-- 4. Babel: Translates React code in the browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <style>
+      body { font-family: 'Poppins', sans-serif; }
+      /* Hide scrollbar for Chrome, Safari and Opera */
+      .scrollbar-hide::-webkit-scrollbar {
+          display: none;
+      }
+      /* Hide scrollbar for IE, Edge and Firefox */
+      .scrollbar-hide {
+          -ms-overflow-style: none;  /* IE and Edge */
+          scrollbar-width: none;  /* Firefox */
+      }
+      
+      /* Hide number input arrows */
+      input[type=number]::-webkit-inner-spin-button, 
+      input[type=number]::-webkit-outer-spin-button { 
+        -webkit-appearance: none; 
+        margin: 0; 
+      }
+    </style>
+    
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            colors: {
+              spoon: { base: '#94a3b8', drain: '#f43f5e', restore: '#10b981', neutral: '#64748b' }
+            },
+            animation: {
+              'fade-in': 'fadeIn 0.3s ease-in-out',
+            },
+            keyframes: {
+              fadeIn: {
+                '0%': { opacity: '0', transform: 'translateY(10px)' },
+                '100%': { opacity: '1', transform: 'translateY(0)' },
+              }
+            }
+          }
+        }
+      }
+    </script>
+</head>
+<body class="bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-slate-100 transition-colors duration-200 min-h-screen">
+    <div id="root"></div>
+
+    <!-- APPLICATION LOGIC -->
+    <script type="text/babel" data-type="module">
+      import React, { useState, useEffect, useMemo } from 'react';
+      import { createRoot } from 'react-dom/client';
+      import { 
+        ArrowUp, ArrowDown, Trash2, Settings, Sun, Moon, 
+        TrendingDown, TrendingUp, Wallet, Minus, Plus, 
+        AlertCircle, RotateCcw, ArrowLeft, Heart, Copy, 
+        CheckCircle, Sparkles, FileText, X, Key, ExternalLink 
+      } from 'lucide-react';
+      import { GoogleGenAI } from "@google/genai";
+
+      // --- TYPES & CONSTANTS ---
+      const DEFAULT_SPOONS = 10;
+      const STORAGE_KEY = 'spoon-tracker-v1';
+      const API_KEY_STORAGE_KEY = 'spoon_tracker_api_key';
+
+      const ImpactType = {
+        DRAINING: 'DRAINING',
+        NEUTRAL: 'NEUTRAL',
+        RESTORING: 'RESTORING',
+      };
+
+      const IMPACT_CONFIG = {
+        [ImpactType.DRAINING]: {
+          label: 'Draining',
+          icon: '🔻',
+          color: 'text-rose-500',
+          bgColor: 'bg-rose-50 dark:bg-rose-900/20',
+          borderColor: 'border-rose-200 dark:border-rose-800',
+        },
+        [ImpactType.NEUTRAL]: {
+          label: 'Neutral',
+          icon: '=',
+          color: 'text-slate-500',
+          bgColor: 'bg-slate-50 dark:bg-slate-800/50',
+          borderColor: 'border-slate-200 dark:border-slate-700',
+        },
+        [ImpactType.RESTORING]: {
+          label: 'Restoring',
+          icon: '🔋',
+          color: 'text-emerald-500',
+          bgColor: 'bg-emerald-50 dark:bg-emerald-900/20',
+          borderColor: 'border-emerald-200 dark:border-emerald-800',
+        }
+      };
+
+      const QUICK_ACTIVITIES = [
+        'Commute', 'Family', 'Homework', 'Housework', 'Meal', 
+        'Nature', 'Pets', 'Rest', 'School', 'Screens', 
+        'Sensory Break', 'Shower', 'Social', 'Work', 'Yoga'
+      ];
+
+      // --- SERVICES ---
+      const generateInsightsService = async (activities, baseBudget, todayAdjustment, currentSpoons, apiKey) => {
+        if (!apiKey) return "Please enter a valid Google Gemini API Key in Settings to generate analysis.";
+        
+        const ai = new GoogleGenAI({ apiKey });
+
+        const activityLog = activities.map(a => {
+          let line = `- ${a.name} (${a.impact}, ${a.spoons} spoons)`;
+          if (a.notes) line += ` [Note: ${a.notes}]`;
+          return line;
+        }).join('\n');
+
+        const effectiveStart = baseBudget + todayAdjustment;
+
+        const prompt = `
+          You are a supportive, objective pattern analyst specializing in autistic energy management (Spoon Theory). 
+          Analyze the following energy ledger for the user.
+          
+          **Context:**
+          - Typical Capacity (Base): ${baseBudget}
+          - Today's Starting Adjustment: ${todayAdjustment} (Negative implies poor sleep, pain, or high morning stress. Positive implies extra energy.)
+          - Effective Starting Spoons: ${effectiveStart}
+          - Ending Balance: ${currentSpoons}
+          - Status: ${currentSpoons < 0 ? 'In Spoon Debt' : 'Positive Energy Balance'}
+          
+          **Activity Ledger:**
+          ${activityLog}
+
+          **Instructions:**
+          1. If there was a negative starting adjustment, acknowledge the difficult start and validate their effort despite it.
+          2. Briefly identify the main energy drains today.
+          3. Note any successful restoration activities.
+          4. If in debt, suggest a low-demand recovery option based on their specific drains.
+          5. Keep the response concise (under 150 words) and suitable for a personal journal entry.
+        `;
+
+        try {
+          const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+          });
+          return response.text || "Unable to generate insight at this time.";
+        } catch (error) {
+          console.error("Gemini API Error:", error);
+          return "Error generating insights. Please check your API Key.";
+        }
+      };
+
+      // --- COMPONENTS ---
+
+      const SpoonIcon = ({ className = "", filled = true }) => (
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+          <path d="M12 2a5 5 0 0 0-5 5v3a7 7 0 0 0 14 0V7a5 5 0 0 0-5-5Z" />
+          <path d="M12 17v5" />
+        </svg>
+      );
+
+      const NavBar = () => (
+        <nav className="flex items-center justify-between pt-4 pb-2 animate-in fade-in slide-in-from-top-2 duration-500">
+          <a href="https://itscourtneyhart.com" className="flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 transition-colors">
+            <ArrowLeft size={14} /> Back to Portfolio
+          </a>
+          <a href="https://ko-fi.com/itscourtneyhart" target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-xs font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 bg-indigo-50 dark:bg-indigo-900/20 px-3 py-1.5 rounded-full transition-colors border border-indigo-100 dark:border-indigo-800 hover:border-indigo-200 shadow-sm hover:shadow">
+            <Heart size={12} className="fill-current" /> Support my work
+          </a>
+        </nav>
+      );
+
+      const ActivityCard = ({ activity, balanceAfter, onDelete, onMoveUp, onMoveDown, isFirst, isLast }) => {
+        const config = IMPACT_CONFIG[activity.impact];
+        const sign = activity.impact === ImpactType.DRAINING ? '-' : activity.impact === ImpactType.RESTORING ? '+' : '';
+        const isDebt = balanceAfter < 0;
+        
+        return (
+          <div className={`group flex items-center gap-3 p-3 mb-3 rounded-lg border transition-all ${config.bgColor} ${config.borderColor} shadow-sm hover:shadow-md`}>
+            <div className="flex flex-col gap-1 opacity-50 group-hover:opacity-100 transition-opacity">
+              <button onClick={() => onMoveUp(activity.id)} disabled={isFirst} className="p-1 hover:bg-black/10 rounded disabled:opacity-30"><ArrowUp size={14} /></button>
+              <button onClick={() => onMoveDown(activity.id)} disabled={isLast} className="p-1 hover:bg-black/10 rounded disabled:opacity-30"><ArrowDown size={14} /></button>
+            </div>
+            <div className="flex-1 grid grid-cols-[1fr_auto] gap-4 items-center">
+              <div>
+                <div className="font-medium text-slate-800 dark:text-slate-100">{activity.name}</div>
+                {activity.notes && <div className="text-sm text-slate-600 dark:text-slate-300 mt-1 italic">"{activity.notes}"</div>}
+                <div className="flex items-center gap-2 mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  <span className="uppercase tracking-wider opacity-75">{config.label}</span>
+                </div>
+              </div>
+              <div className="text-right min-w-[60px]">
+                  <div className={`font-bold text-lg leading-none ${config.color}`}>{sign}{activity.spoons}</div>
+                  <div className={`text-[10px] uppercase font-bold tracking-wider mt-1 ${isDebt ? 'text-rose-500' : 'text-slate-400'}`}>{isDebt ? 'Debt' : 'Bal'}: {balanceAfter}</div>
+              </div>
+            </div>
+            <button onClick={() => onDelete(activity.id)} className="ml-1 p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/30 rounded-full transition-colors"><Trash2 size={18} /></button>
+          </div>
+        );
+      };
+
+      const Header = ({ baseBudget, adjustment, effectiveBudget, drained, restored, balance, isDarkMode, toggleTheme, onSetAdjustment, onOpenSettings, onReset }) => {
+        const isDebt = balance < 0;
+        const absBalance = Math.abs(balance);
+        const maxVisualSpoons = 50; 
+
+        const renderSpoons = () => {
+          if (balance === 0) return <div className="flex items-center gap-2 opacity-40 py-2"><SpoonIcon filled={false} className="w-8 h-8 text-slate-400" /><span className="text-sm italic text-slate-500">Empty</span></div>;
+          const icons = [];
+          const displayCount = Math.min(absBalance, maxVisualSpoons);
+          for (let i = 0; i < displayCount; i++) {
+            icons.push(<div key={i} className="flex justify-center"><SpoonIcon filled={!isDebt} className={`w-5 h-5 sm:w-6 sm:h-6 transition-all duration-300 hover:scale-110 ${isDebt ? 'text-rose-500' : 'text-slate-600 dark:text-emerald-400'}`} /></div>);
+          }
+          if (absBalance > maxVisualSpoons) icons.push(<div key="more" className="col-span-full text-center mt-1"><span className={`text-xs font-bold ${isDebt ? 'text-rose-500' : 'text-slate-500'}`}>+{absBalance - maxVisualSpoons} more</span></div>);
+          return <div className="grid grid-cols-10 gap-y-1 gap-x-0.5 w-full">{icons}</div>;
+        };
+
+        const handleInputChange = (e) => {
+          const val = e.target.value;
+          if (val === '') return;
+          const numVal = parseInt(val);
+          if (!isNaN(numVal) && numVal >= 0 && numVal <= 100) {
+            onSetAdjustment(numVal - baseBudget);
+          }
+        };
+
+        return (
+          <header className="sticky top-0 z-10 bg-slate-50/95 dark:bg-slate-900/95 backdrop-blur-sm pt-2 pb-4 border-b border-slate-200 dark:border-slate-800 mb-6 transition-colors duration-300">
+            <div className="flex items-center justify-between mb-4 pt-2">
+              <div>
+                <h1 className="text-xl font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2"><Wallet size={24} className={isDebt ? "text-rose-500" : "text-indigo-500"} /> Spoon Ledger</h1>
+                <p className="text-xs text-slate-500 dark:text-slate-400">Daily Energy Accounting</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={onReset} className="p-2 rounded-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-rose-500 hover:bg-rose-50 transition-colors" title="Start New Day"><RotateCcw size={20} /></button>
+                <div className="w-px h-6 bg-slate-300 dark:bg-slate-700 mx-1"></div>
+                <button onClick={onOpenSettings} className="p-2 rounded-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-100 transition-colors"><Settings size={20} /></button>
+                <button onClick={toggleTheme} className="p-2 rounded-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 hover:bg-slate-100 transition-colors">{isDarkMode ? <Sun size={20} /> : <Moon size={20} />}</button>
+              </div>
+            </div>
+
+            <div className={`relative rounded-2xl shadow-sm border transition-all duration-500 overflow-hidden ${isDebt ? 'bg-rose-50 dark:bg-rose-900/20 border-rose-200 dark:border-rose-800' : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700'}`}>
+              <div className="p-5 flex flex-col gap-6 relative z-10">
+                <div className="flex justify-between items-baseline">
+                  <p className={`text-xs font-bold tracking-wider uppercase ${isDebt ? 'text-rose-600 dark:text-rose-400' : 'text-slate-500 dark:text-slate-400'}`}>Current Balance</p>
+                  <div className="sm:hidden text-right"><span className={`text-xl font-bold ${isDebt ? 'text-rose-600 dark:text-rose-400' : 'text-slate-800 dark:text-emerald-400'}`}>{balance > 0 ? '+' : ''}{balance}</span></div>
+                </div>
+                <div className="w-full">{renderSpoons()}</div>
+                <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+                  <div className="hidden sm:flex items-center gap-2">
+                    <span className={`text-4xl font-bold tabular-nums leading-none ${isDebt ? 'text-rose-600 dark:text-rose-400' : 'text-slate-800 dark:text-emerald-400'}`}>{balance > 0 ? '+' : ''}{balance}</span>
+                    <span className={`text-sm font-medium self-end mb-1.5 ${isDebt ? 'text-rose-500/70' : 'text-slate-400'}`}>{isDebt ? 'Spoons in Debt' : 'Available'}</span>
+                  </div>
+                  <div className="w-full sm:w-auto pt-4 sm:pt-0 border-t sm:border-t-0 border-black/5 dark:border-white/5 flex flex-row sm:flex-col items-center sm:items-end justify-between sm:justify-center">
+                     <div className="text-left sm:text-right mb-0 sm:mb-1.5">
+                       <p className="text-[10px] uppercase font-bold tracking-wider text-slate-400 flex items-center gap-1">Morning Check-in</p>
+                       {adjustment < 0 && <span className="text-[10px] text-rose-500 font-medium flex items-center sm:justify-end gap-1"><AlertCircle size={10} /> Reduced Capacity</span>}
+                     </div>
+                     <div className="flex items-center bg-slate-100 dark:bg-slate-900/50 rounded-lg p-1 border border-slate-200 dark:border-slate-700">
+                        <button onClick={() => onSetAdjustment(adjustment - 1)} className="w-8 h-8 flex items-center justify-center rounded hover:bg-white dark:hover:bg-slate-700 text-slate-600 dark:text-slate-400 transition-colors"><Minus size={16} /></button>
+                        <div className="w-12 text-center"><input type="number" value={effectiveBudget} onChange={handleInputChange} className="w-full bg-transparent text-lg font-bold text-slate-800 dark:text-slate-200 text-center outline-none p-0 m-0" /></div>
+                        <button onClick={() => onSetAdjustment(adjustment + 1)} className="w-8 h-8 flex items-center justify-center rounded hover:bg-white dark:hover:bg-slate-700 text-slate-600 dark:text-slate-400 transition-colors"><Plus size={16} /></button>
+                     </div>
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center justify-between text-sm border-t border-black/5 dark:border-white/5 py-3 px-5 bg-slate-50/50 dark:bg-black/20">
+                 <div className="flex items-center gap-2"><span className="text-slate-400 text-[10px] uppercase font-bold tracking-wider">Start</span><span className="font-bold text-slate-600 dark:text-slate-300">{effectiveBudget}</span></div>
+                 <div className="h-3 w-px bg-slate-300 dark:bg-slate-700"></div>
+                 <div className="flex items-center gap-2"><TrendingDown size={12} className="text-rose-400" /><span className="font-bold text-rose-600 dark:text-rose-400">-{drained}</span></div>
+                 <div className="h-3 w-px bg-slate-300 dark:bg-slate-700"></div>
+                 <div className="flex items-center gap-2"><TrendingUp size={12} className="text-emerald-400" /><span className="font-bold text-emerald-600 dark:text-emerald-400">+{restored}</span></div>
+              </div>
+              {isDebt && <div className="absolute inset-0 bg-[repeating-linear-gradient(45deg,transparent,transparent_10px,rgba(244,63,94,0.03)_10px,rgba(244,63,94,0.03)_20px)] pointer-events-none"></div>}
+            </div>
+            {isDebt && <div className="mt-2 mx-1 flex items-start gap-2 p-3 bg-rose-100 dark:bg-rose-900/30 rounded-lg border border-rose-200 dark:border-rose-800 animate-in fade-in slide-in-from-top-2 duration-300"><div className="text-rose-500 mt-0.5 font-bold text-xs px-1.5 py-0.5 border border-rose-500 rounded">DEBT</div><p className="text-xs text-rose-700 dark:text-rose-300 font-medium leading-tight">You are borrowing energy. Please be gentle with yourself and consider a restoring activity.</p></div>}
+          </header>
+        );
+      };
+
+      const App = () => {
+        const [baseBudget, setBaseBudget] = useState(DEFAULT_SPOONS);
+        const [todayAdjustment, setTodayAdjustment] = useState(0);
+        const [activities, setActivities] = useState([]);
+        const [isDarkMode, setIsDarkMode] = useState(false);
+        const [apiKey, setApiKey] = useState('');
+        
+        const [activityName, setActivityName] = useState('');
+        const [activityImpact, setActivityImpact] = useState(ImpactType.DRAINING);
+        const [activitySpoons, setActivitySpoons] = useState(1);
+        const [activityNotes, setActivityNotes] = useState('');
+        
+        const [showExport, setShowExport] = useState(false);
+        const [showSettings, setShowSettings] = useState(false);
+        const [copySuccess, setCopySuccess] = useState(false);
+        const [aiInsight, setAiInsight] = useState(null);
+        const [isLoadingAi, setIsLoadingAi] = useState(false);
+
+        const effectiveBudget = useMemo(() => Math.max(1, baseBudget + todayAdjustment), [baseBudget, todayAdjustment]);
+        const ledger = useMemo(() => {
+          let drained = 0, restored = 0;
+          activities.forEach(act => {
+            if (act.impact === ImpactType.DRAINING) drained += act.spoons;
+            if (act.impact === ImpactType.RESTORING) restored += act.spoons;
+          });
+          return { drained, restored, balance: effectiveBudget - drained + restored };
+        }, [activities, effectiveBudget]);
+
+        const activitiesWithBalance = useMemo(() => {
+          let running = effectiveBudget;
+          const reversed = [...activities].reverse().map(act => {
+            if (act.impact === ImpactType.DRAINING) running -= act.spoons;
+            else if (act.impact === ImpactType.RESTORING) running += act.spoons;
+            return { ...act, balanceAfter: running };
+          });
+          return reversed.reverse();
+        }, [activities, effectiveBudget]);
+
+        useEffect(() => {
+          const saved = localStorage.getItem(STORAGE_KEY);
+          if (saved) {
+            const parsed = JSON.parse(saved);
+            setBaseBudget(parsed.dailyBudget || DEFAULT_SPOONS);
+            setTodayAdjustment(parsed.todayAdjustment || 0);
+            setActivities(parsed.activities || []);
+            setIsDarkMode(parsed.isDarkMode || false);
+          } else if (window.matchMedia('(prefers-color-scheme: dark)').matches) setIsDarkMode(true);
+          const savedKey = localStorage.getItem(API_KEY_STORAGE_KEY);
+          if (savedKey) setApiKey(savedKey);
+        }, []);
+
+        useEffect(() => {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify({ dailyBudget: baseBudget, todayAdjustment, activities, isDarkMode }));
+          document.documentElement.classList.toggle('dark', isDarkMode);
+        }, [baseBudget, todayAdjustment, activities, isDarkMode]);
+
+        const handleAddActivity = (e) => {
+          e.preventDefault();
+          if (!activityName.trim()) return;
+          const newActivity = { id: crypto.randomUUID(), name: activityName, impact: activityImpact, spoons: Math.abs(activitySpoons), timestamp: Date.now(), notes: activityNotes.trim() || undefined };
+          setActivities(prev => [newActivity, ...prev]);
+          setActivityName(''); setActivitySpoons(1); setActivityNotes('');
+        };
+
+        const handleStartNewDay = () => {
+          if (window.confirm("Start a fresh day? This will clear logs.")) { setActivities([]); setTodayAdjustment(0); setAiInsight(null); }
+        };
+        
+        const getExportText = () => {
+          const dateStr = new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+          let text = `Spoon Energy Ledger - ${dateStr}\nBase: ${baseBudget}, Adjust: ${todayAdjustment}, Start: ${effectiveBudget}\nEnd Balance: ${ledger.balance} (${ledger.balance < 0 ? 'DEBT' : 'Pos'})\n\nLog:\n`;
+          [...activitiesWithBalance].reverse().forEach(act => {
+             const sign = act.impact === ImpactType.DRAINING ? '-' : act.impact === ImpactType.RESTORING ? '+' : '=';
+             text += `${act.name}: ${sign}${act.spoons} (Bal: ${act.balanceAfter})${act.notes ? ` [${act.notes}]` : ''}\n`;
+          });
+          if (aiInsight) text += `\nAI Analysis:\n${aiInsight}`;
+          return text;
+        };
+
+        return (
+          <div className="max-w-md mx-auto px-4 pb-20 min-h-screen flex flex-col relative">
+            <NavBar />
+            <Header baseBudget={baseBudget} adjustment={todayAdjustment} effectiveBudget={effectiveBudget} drained={ledger.drained} restored={ledger.restored} balance={ledger.balance} isDarkMode={isDarkMode} toggleTheme={() => setIsDarkMode(!isDarkMode)} onSetAdjustment={setTodayAdjustment} onOpenSettings={() => setShowSettings(true)} onReset={handleStartNewDay} />
+            
+            <div className="mb-4 flex flex-wrap gap-2">
+              {QUICK_ACTIVITIES.map((name) => (
+                <button key={name} onClick={() => setActivityName(name)} className="px-3 py-1.5 rounded-full text-xs font-medium bg-slate-100 text-slate-600 border border-slate-200 hover:bg-indigo-50 hover:text-indigo-600 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700 dark:hover:bg-indigo-900/20 transition-colors">{name}</button>
+              ))}
+            </div>
+
+            <form onSubmit={handleAddActivity} className="bg-white dark:bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 mb-6">
+              <div className="flex gap-2 mb-3">
+                {[ImpactType.DRAINING, ImpactType.NEUTRAL, ImpactType.RESTORING].map(type => (
+                  <button key={type} type="button" onClick={() => setActivityImpact(type)} className={`flex-1 py-2 text-sm font-medium rounded-lg border ${activityImpact === type ? (type === ImpactType.DRAINING ? 'bg-rose-50 border-rose-500 text-rose-600 dark:bg-rose-900/30' : type === ImpactType.RESTORING ? 'bg-emerald-50 border-emerald-500 text-emerald-600 dark:bg-emerald-900/30' : 'bg-slate-100 border-slate-500 text-slate-700 dark:bg-slate-700') : 'border-slate-200 text-slate-500 dark:border-slate-700'}`}>{type === ImpactType.DRAINING ? 'Drain' : type === ImpactType.RESTORING ? 'Restore' : 'Neutral'}</button>
+                ))}
+              </div>
+              <div className="flex gap-3 mb-3">
+                <input type="text" placeholder="Activity" value={activityName} onChange={(e) => setActivityName(e.target.value)} className="flex-1 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500" />
+                {activityImpact !== ImpactType.NEUTRAL && (
+                  <div className="w-20 relative">
+                    <input type="number" min="1" max="20" value={activitySpoons} onChange={(e) => setActivitySpoons(parseInt(e.target.value) || 0)} className="w-full px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 text-center" />
+                    <span className="absolute right-1 top-1/2 -translate-y-1/2 text-xs text-slate-400 pointer-events-none pr-1">sp</span>
+                  </div>
+                )}
+              </div>
+              <div className="flex gap-3">
+                  <input type="text" placeholder="Add optional notes..." value={activityNotes} onChange={(e) => setActivityNotes(e.target.value)} className="flex-1 px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-slate-900 dark:text-white outline-none focus:ring-2 focus:ring-indigo-500 text-sm" />
+                  <button type="submit" className="p-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg transition-colors flex items-center justify-center w-12 shrink-0"><Plus size={24} /></button>
+              </div>
+            </form>
+
+            <div className="flex-1">
+              {activitiesWithBalance.length === 0 ? <div className="text-center py-10 text-slate-400 border-2 border-dashed border-slate-200 dark:border-slate-800 rounded-xl"><p>No activities logged yet.</p></div> : 
+                activitiesWithBalance.map((act, i) => <ActivityCard key={act.id} activity={act} balanceAfter={act.balanceAfter} onDelete={(id) => setActivities(p => p.filter(a => a.id !== id))} onMoveUp={(id) => {
+                  const idx = activities.findIndex(a => a.id === id);
+                  if (idx > 0) { const n = [...activities]; [n[idx-1], n[idx]] = [n[idx], n[idx-1]]; setActivities(n); }
+                }} onMoveDown={(id) => {
+                  const idx = activities.findIndex(a => a.id === id);
+                  if (idx < activities.length - 1) { const n = [...activities]; [n[idx+1], n[idx]] = [n[idx], n[idx+1]]; setActivities(n); }
+                }} isFirst={i===0} isLast={i===activities.length-1} />)
+              }
+            </div>
+
+            <div className="mt-8 border-t border-slate-200 dark:border-slate-800 pt-6">
+              <button onClick={() => setShowExport(!showExport)} className="w-full py-3 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium rounded-xl flex items-center justify-center gap-2"><FileText size={18} />{showExport ? 'Hide Note' : 'Generate Daily Note'}</button>
+              {showExport && <div className="mt-4 bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-200 dark:border-slate-700 shadow-lg animate-fade-in">
+                <textarea readOnly value={getExportText()} className="w-full h-48 p-3 text-sm font-mono bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg resize-none mb-3" />
+                <div className="flex flex-col gap-2">
+                    <button onClick={() => { navigator.clipboard.writeText(getExportText()); setCopySuccess(true); setTimeout(() => setCopySuccess(false), 2000); }} className="w-full py-2 bg-indigo-600 text-white rounded-lg font-medium flex items-center justify-center gap-2">{copySuccess ? <CheckCircle size={18} /> : <Copy size={18} />} Copied</button>
+                    <button onClick={async () => { setIsLoadingAi(true); setAiInsight(await generateInsightsService(activities, baseBudget, todayAdjustment, ledger.balance, apiKey)); setIsLoadingAi(false); }} disabled={isLoadingAi} className="w-full py-2 bg-gradient-to-r from-purple-500 to-indigo-500 text-white rounded-lg font-medium flex items-center justify-center gap-2">{isLoadingAi ? '...' : <Sparkles size={18} />} Generate AI Analysis</button>
+                </div>
+                {aiInsight && <div className="mt-4 p-3 bg-purple-50 dark:bg-purple-900/20 border border-purple-100 dark:border-purple-800 rounded-lg text-sm">{aiInsight}</div>}
+              </div>}
+            </div>
+
+            {showSettings && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"><div className="bg-white dark:bg-slate-800 w-full max-w-sm rounded-xl shadow-xl p-6 relative">
+               <button onClick={() => setShowSettings(false)} className="absolute top-4 right-4"><X size={20} /></button>
+               <h2 className="text-lg font-bold mb-4 flex items-center gap-2"><Settings size={20} /> Settings</h2>
+               <div className="space-y-6">
+                  <div><label className="block text-sm font-medium mb-1">Typical Base Capacity</label><input type="number" value={baseBudget} onChange={(e) => setBaseBudget(parseInt(e.target.value) || 1)} className="w-full px-3 py-2 rounded-lg border bg-slate-50 dark:bg-slate-900" /></div>
+                  <div className="pt-4 border-t"><label className="block text-sm font-medium mb-1 flex items-center gap-2"><Key size={16} className="text-purple-500" /> AI Key</label><input type="password" placeholder="Paste API Key..." value={apiKey} onChange={(e) => {setApiKey(e.target.value); localStorage.setItem(API_KEY_STORAGE_KEY, e.target.value);}} className="w-full px-3 py-2 rounded-lg border bg-slate-50 dark:bg-slate-900 text-sm font-mono" /><a href="https://aistudio.google.com/app/apikey" target="_blank" className="inline-flex items-center gap-1 text-xs text-purple-600 mt-2">Get Free Key <ExternalLink size={12} /></a></div>
+               </div>
+               <div className="mt-6"><button onClick={() => setShowSettings(false)} className="w-full py-2 bg-slate-900 dark:bg-slate-700 text-white rounded-lg">Done</button></div>
+            </div></div>}
+          </div>
+        );
+      };
+
+      const root = createRoot(document.getElementById('root'));
+      root.render(<React.StrictMode><App /></React.StrictMode>);
+    </script>
+</body>
+</html>
